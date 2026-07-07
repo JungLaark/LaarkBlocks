@@ -1,0 +1,88 @@
+# ── LaarkBlocks — 전체 플랫폼 원커맨드 기동 ─────────────────────
+#
+#   docker compose up --build -d
+#
+# 서비스 토폴로지:
+#   frontend-studio(:5173→nginx) ─→ ai-engine(:8000) ─→ postgres(:5432)
+#                                          └──────────→ ollama(:11434)
+#   ollama-init : ollama 에 모델을 자동 pull 하고 종료하는 1회성 잡
+#
+# 모델 변경:  OLLAMA_MODEL=qwen3:4b docker compose up --build -d
+# (저사양 머신은 qwen3:4b / llama3.2:3b 권장 — .env 파일로도 지정 가능)
+
+services:
+  # ── 실행 이력 저장소 (운영 콘솔) ────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: laark
+      POSTGRES_PASSWORD: laark
+      POSTGRES_DB: laarkblocks
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laark -d laarkblocks"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── 로컬 sLLM 서버 ──────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama   # 모델 캐시 — 재기동 시 재다운로드 없음
+    ports:
+      - "11434:11434"                 # (선택) 호스트에서 직접 ollama CLI 사용용
+    restart: unless-stopped
+    # GPU 가속(NVIDIA)이 있다면 아래 주석 해제:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── 모델 자동 다운로드 (1회성 초기화 잡) ────────────────────
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+    volumes:
+      - ./scripts/init-ollama.sh:/init-ollama.sh:ro
+    entrypoint: ["/bin/sh", "/init-ollama.sh"]
+    restart: "no"                     # 완료 후 종료되는 것이 정상
+
+  # ── 백엔드 (에이전트 실행 엔진 + 운영 콘솔 API) ─────────────
+  ai-engine:
+    build: .
+    environment:
+      # 컨테이너 환경 = 운영 프로파일: SQLite 대신 PostgreSQL
+      LAARK_DATABASE_URL: postgresql+asyncpg://laark:laark@postgres:5432/laarkblocks
+      # 도커 네트워크에서는 localhost 가 아닌 서비스 이름으로 통신
+      LAARK_OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "8000:8000"                   # (선택) Swagger UI 직접 접근용
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── 프론트엔드 (빌더 스튜디오 + 운영 콘솔 UI) ───────────────
+  frontend-studio:
+    build: ./apps/frontend-studio
+    ports:
+      - "5173:80"                     # http://localhost:5173
+    depends_on:
+      - ai-engine
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama-models:

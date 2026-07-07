@@ -1,0 +1,5 @@
+# Windows 에서 clone 해도 셸 스크립트는 반드시 LF 유지
+# (CRLF 로 체크아웃되면 컨테이너의 /bin/sh 가 스크립트를 해석하지 못한다)
+*.sh text eol=lf
+docker-compose.yml text eol=lf
+Dockerfile text eol=lf

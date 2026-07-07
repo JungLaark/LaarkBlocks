@@ -6,6 +6,29 @@
 > 분산된 실행 단위를 **등록 → 배포 → 모니터링**하는 플랫폼 설계를,
 > 그 대상만 "기기"에서 "AI 에이전트"로 바꾼 프로젝트입니다.
 
+<!-- 📸 데모 GIF 자리 — 촬영 가이드:
+     ① 빌더 스튜디오에서 도구 체크 → 플레이그라운드에서 질문 → 토큰 타이핑 + 도구 칩
+     ② 운영 콘솔로 전환 → 방금 실행이 집계·이력에 나타남 → 행 클릭 → 스팬 타임라인
+     15~20초, 1280px 폭 권장. 파일: docs/demo.gif
+<p align="center"><img src="docs/demo.gif" width="800" alt="LaarkBlocks demo" /></p>
+-->
+
+## ⚡ Quick Start (Docker — 명령어 3줄)
+
+```bash
+git clone https://github.com/JungLaark/LaarkBlocks.git && cd LaarkBlocks
+docker compose up --build -d        # 백엔드 + 프론트 + PostgreSQL + Ollama 일괄 기동
+# ollama-init 가 모델(qwen3:8b)을 자동 다운로드 → 완료 후 http://localhost:5173 접속
+```
+
+- 모델 다운로드 진행 상황: `docker compose logs -f ollama-init`
+- 저사양 머신: `OLLAMA_MODEL=qwen3:4b docker compose up --build -d`
+- 구성: 프론트(nginx, :5173) → 백엔드(:8000) → PostgreSQL + Ollama.
+  컨테이너 환경에서는 SQLite 대신 **PostgreSQL** 로 자동 전환됩니다
+  (`LAARK_DATABASE_URL` 주입 — 코드 변경 없음).
+- nginx 프록시에 `proxy_buffering off` 가 설정되어 있어 SSE 토큰 스트리밍이
+  버퍼링 없이 실시간으로 전달됩니다. ([nginx.conf](apps/frontend-studio/nginx.conf))
+
 ## 핵심 개념
 
 ```
@@ -24,7 +47,7 @@
 - **모델 추상화**: `"ollama/qwen3:8b"` ↔ `"openai/gpt-4o"` — 설정 한 줄로 로컬 sLLM/외부 API 전환
 - **이벤트 계약**: token / tool_start / tool_end / done / error — 빌더 스튜디오와 운영 콘솔이 같은 계약을 소비
 
-## 빠른 시작
+## 로컬 개발 (Docker 없이)
 
 ```bash
 # 1. 백엔드 의존성 설치
@@ -133,7 +156,8 @@ pytest -v    # 18 passed
 - [x] **2단계(b) — 지식 레이어 & 멀티 에이전트**: RAG 지식베이스(벡터 + 직접 구현한 BM25 → RRF 하이브리드 검색, `kb__이름` 도구 자동 주입), 슈퍼바이저 멀티 에이전트(agent-as-tool 위임, 워커 스트림 분리)
 - [x] **3단계 — 운영 콘솔(LLMOps) 백엔드**: Trace/Span 실행 이력 자동 수집(워커 비용 포함), 토큰·비용 집계(모델 단가표), 비동기 적재 파이프라인(sink, 응답 지연 0), LLM-as-judge 품질 평가. SQLite ↔ PostgreSQL 겸용(SQLAlchemy async)
 - [x] **4단계 — 빌더 스튜디오 & 운영 콘솔 (React + TS)**: 설정 조립 폼 + SSE 실시간 플레이그라운드(`useAgentStream`), 사용량 스탯 타일·에이전트별 비용 차트·실행 이력·스팬 타임라인 뷰어
-- [ ] **고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 평가, sLLM 파인튜닝 모델 등록, Docker Compose 배포
+- [x] **5단계 — 배포 패키징**: Docker Compose 원커맨드 기동(프론트 nginx + 백엔드 + PostgreSQL + Ollama), 모델 자동 다운로드(ollama-init), SSE 대응 프록시
+- [ ] **고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 평가, sLLM 파인튜닝 모델 등록
 - [ ] **3단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 버전 저장/롤백, 테스트 플레이그라운드
 - [ ] **4단계 — 운영 콘솔 (LLMOps)**: 실행 이력/트레이스 뷰어, 토큰·비용 집계, LLM-as-judge 품질 평가
 - [ ] **5단계 — 모델 확장**: LoRA 파인튜닝 sLLM 등록, GGUF 양자화 서빙
