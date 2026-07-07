@@ -1,0 +1,27 @@
+{
+  "agent_id": "research-team",
+  "name": "리서치 팀 (슈퍼바이저)",
+  "description": "리서처와 계산 담당 워커를 지휘하는 멀티 에이전트 데모.",
+  "model_name": "ollama/qwen3:8b",
+  "system_prompt": "당신은 팀을 지휘하는 슈퍼바이저입니다. 사용자의 요청을 분석해 적합한 워커에게 위임(delegate_to__*)하고, 워커들의 결과를 종합하여 최종 답변을 작성하세요. 직접 조사하거나 계산하지 말고 반드시 워커를 활용하세요.",
+  "tools": [],
+  "model_params": { "temperature": 0.3 },
+  "workers": [
+    {
+      "agent_id": "researcher",
+      "name": "리서처",
+      "description": "정보 조사와 요약을 담당한다. 지식베이스 검색이 필요한 질문을 처리",
+      "model_name": "ollama/qwen3:8b",
+      "system_prompt": "당신은 리서처입니다. 주어진 조사 과제에 대해 아는 정보를 구조적으로 정리해 보고하세요.",
+      "tools": []
+    },
+    {
+      "agent_id": "analyst",
+      "name": "분석가",
+      "description": "수치 계산과 데이터 분석을 담당한다. 계산이 필요한 작업을 처리",
+      "model_name": "ollama/qwen3:8b",
+      "system_prompt": "당신은 분석가입니다. 계산이 필요하면 calculator 도구를 사용해 정확한 수치로 답하세요.",
+      "tools": ["calculator"]
+    }
+  ]
+}

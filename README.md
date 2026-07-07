@@ -53,6 +53,9 @@ python scripts/run_client.py "(6 + 4) * 7 을 계산해줘"
 | GET | `/api/v1/providers` | 모델 provider 목록 |
 | GET | `/api/v1/mcp/servers` | 연결된 MCP 서버/도구 현황 |
 | POST | `/api/v1/mcp/refresh` | MCP 설정 무중단 재로드 |
+| POST | `/api/v1/knowledge` | 지식베이스 생성 (`kb__이름` 도구 자동 등록) |
+| POST | `/api/v1/knowledge/{name}/documents` | 문서 등록 (청킹→임베딩→색인) |
+| POST | `/api/v1/knowledge/{name}/search` | 하이브리드 검색 (디버그) |
 | GET | `/health` | 헬스체크 |
 
 ### 실행 요청 예시
@@ -79,11 +82,13 @@ src/
 ├── config.py             # 환경변수 기반 설정 (LAARK_ 접두어)
 ├── schemas/agent.py      # AgentConfig — "에이전트는 설정이다"의 계약
 ├── core/
-│   ├── llm_factory.py    # 모델 추상화 (provider 레지스트리, lazy import)
-│   ├── tool_registry.py  # 도구 레지스트리 (이름 → 구현체)
-│   ├── mcp_manager.py    # MCP 서버 연결/도구 동적 주입 (mcp__서버__도구)
-│   └── engine.py         # 실행 엔진 — 동적 그래프 빌드 + 세션 메모리(체크포인터)
-└── api/v1/endpoints.py   # SSE 스트리밍 API + 세션 이력 + MCP 관리
+│   ├── llm_factory.py        # 모델 추상화 (provider 레지스트리, lazy import)
+│   ├── embedding_factory.py  # 임베딩 추상화 (동일 패턴)
+│   ├── tool_registry.py      # 도구 레지스트리 (이름 → 구현체)
+│   ├── mcp_manager.py        # MCP 서버 연결/도구 동적 주입 (mcp__서버__도구)
+│   ├── knowledge.py          # RAG — 청킹, BM25+벡터 RRF 하이브리드 (kb__이름)
+│   └── engine.py             # 실행 엔진 — 동적 그래프 빌드, 세션 메모리, 슈퍼바이저
+└── api/v1/endpoints.py       # SSE API + 세션 이력 + MCP/지식베이스 관리
 tests/                    # Fake provider 주입으로 LLM 서버 없이 전 경로 검증
 configs/agents/           # 에이전트 프리셋 (JSON)
 scripts/run_client.py     # SSE 수동 테스트 클라이언트
@@ -103,7 +108,8 @@ pytest -v    # 18 passed
 
 - [x] **1단계 — 실행 엔진 코어**: 설정 기반 동적 그래프 빌드, 모델 추상화, SSE 스트리밍
 - [x] **2단계(a) — 세션 메모리 & MCP**: 체크포인터 기반 멀티턴 대화(에이전트/세션 격리), MCP 서버 도구 동적 주입(`mcp__서버__도구`), 무중단 재로드
-- [ ] **2단계(b) — 지식 레이어**: RAG 지식베이스(pgvector, 하이브리드 검색 + 리랭킹), 멀티 에이전트(슈퍼바이저)
+- [x] **2단계(b) — 지식 레이어 & 멀티 에이전트**: RAG 지식베이스(벡터 + 직접 구현한 BM25 → RRF 하이브리드 검색, `kb__이름` 도구 자동 주입), 슈퍼바이저 멀티 에이전트(agent-as-tool 위임, 워커 스트림 분리)
+- [ ] **2단계(c) — 검색 고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 검색 품질 평가
 - [ ] **3단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 버전 저장/롤백, 테스트 플레이그라운드
 - [ ] **4단계 — 운영 콘솔 (LLMOps)**: 실행 이력/트레이스 뷰어, 토큰·비용 집계, LLM-as-judge 품질 평가
 - [ ] **5단계 — 모델 확장**: LoRA 파인튜닝 sLLM 등록, GGUF 양자화 서빙

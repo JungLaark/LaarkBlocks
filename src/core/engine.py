@@ -29,6 +29,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -46,6 +47,11 @@ _TOOLS_NODE = "tools"
 
 # 무한 도구 루프 방지용 실행 상한 (그래프 스텝 수 기준)
 _RECURSION_LIMIT = 25
+
+# 워커 실행에 붙이는 태그 — 슈퍼바이저의 SSE 스트림에서 워커 내부 이벤트
+# (토큰/도구)를 분리하는 기준. 워커 활동은 delegate_to__* 도구의
+# tool_start/tool_end 로만 표면화된다. (스트림 이중 출력 방지)
+_WORKER_TAG = "laark:worker"
 
 
 class AgentEngine:
@@ -90,6 +96,12 @@ class AgentEngine:
 
         # 2) 도구 해석 — 이름 목록을 실제 구현체로 변환
         tools = resolve_tools(config.tools)
+
+        # 2-1) 슈퍼바이저: 워커들을 위임 도구(delegate_to__*)로 변환해 추가.
+        #      워커도 완전한 AgentConfig 이므로 같은 build_graph 로 재귀 빌드된다.
+        for worker_cfg in config.workers:
+            tools.append(self._make_delegation_tool(worker_cfg))
+
         # 도구가 있으면 모델에 도구 스키마를 바인딩 (function calling)
         model = llm.bind_tools(tools) if tools else llm
 
@@ -121,6 +133,40 @@ class AgentEngine:
         # 대화 상태(messages)가 저장/복원된다.
         return builder.compile(
             checkpointer=self._checkpointer if use_memory else None
+        )
+
+    def _make_delegation_tool(self, worker_cfg: AgentConfig) -> StructuredTool:
+        """워커 에이전트를 슈퍼바이저용 위임 도구로 래핑한다. (agent-as-tool)
+
+        - 도구 description 에 워커의 역할을 담아 슈퍼바이저(모델)의
+          라우팅 판단 근거로 제공한다.
+        - 워커 실행에 _WORKER_TAG 를 붙여, 슈퍼바이저 스트림에서 워커의
+          내부 토큰/도구 이벤트를 걸러낼 수 있게 한다.
+        """
+        worker_graph = self.build_graph(worker_cfg)  # 워커는 무상태 실행
+
+        async def _delegate(task: str) -> str:
+            result = await worker_graph.ainvoke(
+                {"messages": [HumanMessage(content=task)]},
+                config={
+                    "recursion_limit": _RECURSION_LIMIT,
+                    "tags": [_WORKER_TAG],
+                },
+            )
+            # 워커의 최종 응답(마지막 AI 메시지)만 슈퍼바이저에게 반환
+            for message in reversed(result["messages"]):
+                if isinstance(message, AIMessage) and message.content:
+                    return _chunk_to_text(message)
+            return "(워커가 응답을 생성하지 못했습니다)"
+
+        return StructuredTool.from_function(
+            coroutine=_delegate,
+            name=f"delegate_to__{worker_cfg.agent_id}",
+            description=(
+                f"'{worker_cfg.name}' 에이전트에게 작업을 위임한다. "
+                f"담당 역할: {worker_cfg.description or worker_cfg.name}. "
+                "task 에는 위임할 작업을 완결된 문장으로 구체적으로 서술할 것."
+            ),
         )
 
     async def astream(
@@ -160,6 +206,11 @@ class AgentEngine:
             version="v2",
             config=run_config,
         ):
+            # 워커 내부 이벤트(토큰/도구)는 스킵 — 워커 활동은 슈퍼바이저의
+            # delegate_to__* 도구 호출(tool_start/tool_end)로만 표면화된다.
+            if _WORKER_TAG in event.get("tags", []):
+                continue
+
             kind = event["event"]
 
             # ── 모델 토큰 스트림 ────────────────────────────────

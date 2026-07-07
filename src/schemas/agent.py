@@ -15,7 +15,7 @@ provider 부분만 보고 llm_factory 가 적절한 구현체를 선택하므로
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ModelParams(BaseModel):
@@ -63,6 +63,30 @@ class AgentConfig(BaseModel):
         examples=[["get_current_time", "calculator"]],
     )
     model_params: ModelParams = Field(default_factory=ModelParams)
+
+    # ── 멀티 에이전트 (슈퍼바이저 패턴) ──────────────────────────
+    # workers 가 있으면 이 에이전트는 '슈퍼바이저'가 된다.
+    # 각 워커는 'delegate_to__{agent_id}' 도구로 노출되어, 슈퍼바이저(모델)가
+    # 워커의 description 을 보고 작업을 위임(라우팅)한다. (agent-as-tool 패턴)
+    workers: list["AgentConfig"] = Field(
+        default_factory=list,
+        description="위임 대상 워커 에이전트 목록. description 이 라우팅 기준이 되므로 워커의 역할을 구체적으로 쓸 것",
+    )
+
+    @model_validator(mode="after")
+    def validate_worker_depth(self) -> "AgentConfig":
+        """계층은 슈퍼바이저 → 워커 1단계까지만 허용한다.
+
+        더 깊은 중첩은 토큰 비용과 지연이 기하급수적으로 늘고 디버깅이
+        어려워지므로, 플랫폼 차원에서 명시적으로 차단한다.
+        """
+        for w in self.workers:
+            if w.workers:
+                raise ValueError(
+                    f"워커 '{w.agent_id}' 는 자신의 워커를 가질 수 없습니다 "
+                    "(중첩은 1단계까지만 지원)"
+                )
+        return self
 
     @field_validator("model_name")
     @classmethod

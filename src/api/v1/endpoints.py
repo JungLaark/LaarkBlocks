@@ -24,10 +24,17 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.config import get_settings
 from src.core.engine import engine
+from src.core.knowledge import kb_manager
 from src.core.llm_factory import available_providers
 from src.core.mcp_manager import mcp_manager
 from src.core.tool_registry import available_tools
 from src.schemas.agent import AgentConfig, AgentRunRequest, StreamEventType
+from src.schemas.knowledge import (
+    DocumentIn,
+    KnowledgeBaseConfig,
+    SearchRequest,
+    SearchResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,3 +184,51 @@ async def refresh_mcp() -> dict[str, int]:
     from pathlib import Path
 
     return await mcp_manager.refresh(Path(get_settings().mcp_config_path))
+
+
+# ──────────────────────────────────────────────────────────────────
+# 지식베이스 (RAG)
+# ──────────────────────────────────────────────────────────────────
+
+@router.post("/knowledge", summary="지식베이스 생성", status_code=201)
+async def create_knowledge_base(config: KnowledgeBaseConfig) -> dict[str, str]:
+    """지식베이스를 생성하면 'kb__{name}' 검색 도구가 자동 등록되어
+    에이전트 설정(tools)에서 즉시 참조할 수 있다."""
+    try:
+        kb_manager.create(config)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"name": config.name, "tool": f"kb__{config.name}"}
+
+
+@router.get("/knowledge", summary="지식베이스 현황")
+async def list_knowledge_bases() -> dict[str, dict]:
+    """이름 → 문서/청크 수 및 노출 도구명."""
+    return kb_manager.status()
+
+
+@router.post("/knowledge/{name}/documents", summary="문서 등록")
+async def add_document(name: str, doc: DocumentIn) -> dict[str, int]:
+    """문서를 청킹→임베딩→색인한다. 추가된 청크 수를 반환."""
+    try:
+        kb = kb_manager.get(name)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"chunks_added": kb.add_document(doc.text, source=doc.source)}
+
+
+@router.post("/knowledge/{name}/search", summary="하이브리드 검색 (디버그)")
+async def search_knowledge_base(name: str, req: SearchRequest) -> list[SearchResult]:
+    """운영 콘솔/디버깅용 직접 검색 — 에이전트를 거치지 않고 검색 품질을 확인."""
+    try:
+        kb = kb_manager.get(name)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return kb.search(req.query, top_k=req.top_k)
+
+
+@router.delete("/knowledge/{name}", summary="지식베이스 삭제")
+async def delete_knowledge_base(name: str) -> dict[str, str]:
+    """지식베이스와 그 검색 도구를 함께 제거한다."""
+    kb_manager.delete(name)
+    return {"deleted": name}

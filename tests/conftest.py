@@ -18,9 +18,10 @@ from langchain_core.callbacks import (
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.embeddings import Embeddings
 from pydantic import ConfigDict
 
-from src.core import llm_factory
+from src.core import embedding_factory, llm_factory
 from src.schemas.agent import AgentConfig
 
 
@@ -150,6 +151,42 @@ def use_scripted_model():
     # 테스트 종료 후 fake provider 제거 (레지스트리 원상 복구)
     for name in registered:
         llm_factory._PROVIDER_BUILDERS.pop(name, None)
+
+
+class HashEmbeddings(Embeddings):
+    """토큰 해시 기반 결정론적 임베딩 (테스트용).
+
+    같은 단어를 공유하는 텍스트일수록 코사인 유사도가 높아지므로,
+    실제 임베딩 서버 없이 벡터 검색의 상대 순위를 검증할 수 있다.
+    """
+
+    DIM = 64
+
+    def _vec(self, text: str) -> list[float]:
+        import re
+
+        vec = [0.0] * self.DIM
+        for token in re.findall(r"[가-힣a-zA-Z0-9_.]+", text.lower()):
+            vec[hash(token) % self.DIM] += 1.0
+        return vec
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vec(t) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vec(text)
+
+
+@pytest.fixture
+def use_fake_embeddings():
+    """'fake' 임베딩 provider 를 등록하는 픽스처. (임베딩 서버 불필요)"""
+
+    @embedding_factory.register_provider("fake")
+    def _build(model: str) -> Embeddings:
+        return HashEmbeddings()
+
+    yield
+    embedding_factory._EMBEDDING_BUILDERS.pop("fake", None)
 
 
 def make_config(**overrides: Any) -> AgentConfig:
