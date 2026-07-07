@@ -114,8 +114,17 @@ class ScriptedChatModel(BaseChatModel):
             return
 
         text = message.content if isinstance(message.content, str) else ""
-        for i in range(0, len(text), 2):
-            chunk = ChatGenerationChunk(message=AIMessageChunk(content=text[i : i + 2]))
+        pieces = [text[i : i + 2] for i in range(0, len(text), 2)] or [""]
+        for idx, piece in enumerate(pieces):
+            # usage_metadata 는 청크 병합 시 합산되므로 마지막 청크에만 부착
+            # (실제 provider 들도 스트리밍 마지막에 usage 를 보내는 방식)
+            is_last = idx == len(pieces) - 1
+            chunk = ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content=piece,
+                    usage_metadata=message.usage_metadata if is_last else None,
+                )
+            )
             if run_manager:
                 # 콜백에 토큰을 알려야 astream_events 가 stream 이벤트를 방출한다
                 run_manager.on_llm_new_token(chunk.text, chunk=chunk)
@@ -206,3 +215,27 @@ def make_config(**overrides: Any) -> AgentConfig:
 async def collect(stream: AsyncIterator[dict]) -> list[dict]:
     """비동기 이벤트 스트림을 리스트로 수집."""
     return [ev async for ev in stream]
+
+
+@pytest.fixture
+async def capture_traces():
+    """트레이스 sink 를 리스트 수집기로 교체하는 픽스처.
+
+    테스트 본문에서 실행 후 traces 리스트를 검사하면 된다.
+    (drain 으로 fire-and-forget 적재 태스크 완료를 보장)
+    """
+    from src.core import tracing
+
+    traces: list = []
+
+    async def _sink(trace) -> None:
+        traces.append(trace)
+
+    tracing.set_sink(_sink)
+
+    async def _get() -> list:
+        await tracing.drain()
+        return traces
+
+    yield _get
+    tracing.set_sink(None)

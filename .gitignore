@@ -9,6 +9,9 @@ venv/
 # Env / Secrets
 .env
 
+# Local database
+*.db
+
 # IDE
 .idea/
 .vscode/

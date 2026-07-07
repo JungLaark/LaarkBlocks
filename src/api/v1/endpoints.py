@@ -24,16 +24,27 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.config import get_settings
 from src.core.engine import engine
+from src.core.judge import judge_trace
 from src.core.knowledge import kb_manager
 from src.core.llm_factory import available_providers
 from src.core.mcp_manager import mcp_manager
 from src.core.tool_registry import available_tools
+from src.db.repository import trace_repo
 from src.schemas.agent import AgentConfig, AgentRunRequest, StreamEventType
 from src.schemas.knowledge import (
     DocumentIn,
     KnowledgeBaseConfig,
     SearchRequest,
     SearchResult,
+)
+from src.schemas.tracing import (
+    AgentUsageStats,
+    EvaluationIn,
+    EvaluationOut,
+    JudgeRequest,
+    TraceData,
+    TraceSummary,
+    UsageStats,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,3 +243,82 @@ async def delete_knowledge_base(name: str) -> dict[str, str]:
     """지식베이스와 그 검색 도구를 함께 제거한다."""
     kb_manager.delete(name)
     return {"deleted": name}
+
+
+# ──────────────────────────────────────────────────────────────────
+# 운영 콘솔 (LLMOps) — 실행 이력 / 집계 / 품질 평가
+# ──────────────────────────────────────────────────────────────────
+
+@router.get("/traces", summary="실행 이력 목록")
+async def list_traces(
+    agent_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[TraceSummary]:
+    """최신순 실행 이력. agent_id/status 필터와 페이지네이션 지원."""
+    return await trace_repo.list_traces(
+        agent_id=agent_id, status=status, limit=min(limit, 200), offset=offset
+    )
+
+
+@router.get("/traces/{trace_id}", summary="트레이스 상세 (스팬 포함)")
+async def get_trace(trace_id: str) -> TraceData:
+    """모델 호출/도구 실행 스팬 타임라인 — 트레이스 뷰어의 데이터 소스."""
+    trace = await trace_repo.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"트레이스가 없습니다: {trace_id}")
+    return trace
+
+
+@router.get("/stats/usage", summary="토큰/비용/지연 집계")
+async def get_usage_stats(agent_id: str | None = None) -> UsageStats:
+    """전체 또는 특정 에이전트의 사용량 집계 (대시보드 상단 지표)."""
+    return await trace_repo.usage_stats(agent_id=agent_id)
+
+
+@router.get("/stats/usage/by-agent", summary="에이전트별 사용량 집계")
+async def get_usage_stats_by_agent() -> list[AgentUsageStats]:
+    """비용 내림차순 에이전트별 집계 — 비용 상위 에이전트 파악용."""
+    return await trace_repo.usage_stats_by_agent()
+
+
+@router.get("/traces/{trace_id}/evaluations", summary="트레이스 평가 목록")
+async def list_evaluations(trace_id: str) -> list[EvaluationOut]:
+    return await trace_repo.list_evaluations(trace_id)
+
+
+@router.post(
+    "/traces/{trace_id}/evaluations",
+    summary="평가 수동 등록",
+    status_code=201,
+)
+async def add_evaluation(trace_id: str, evaluation: EvaluationIn) -> EvaluationOut:
+    """사람 피드백 또는 외부 평가 파이프라인의 결과를 직접 기록한다."""
+    if await trace_repo.get_trace(trace_id) is None:
+        raise HTTPException(status_code=404, detail=f"트레이스가 없습니다: {trace_id}")
+    return await trace_repo.add_evaluation(trace_id, evaluation)
+
+
+@router.post(
+    "/traces/{trace_id}/evaluate",
+    summary="LLM-as-judge 품질 평가 실행",
+    status_code=201,
+)
+async def evaluate_trace(trace_id: str, req: JudgeRequest) -> EvaluationOut:
+    """저지 모델이 트레이스의 최종 답변을 평가하고 결과를 기록한다.
+
+    실행 모델과 저지 모델을 분리할 수 있다 — 예: 실행은 로컬 sLLM,
+    평가는 상위 모델로 샘플링 평가하여 품질 저하를 조기 감지.
+    """
+    trace = await trace_repo.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"트레이스가 없습니다: {trace_id}")
+
+    try:
+        evaluation = await judge_trace(trace, req.judge_model, req.criteria)
+    except Exception as e:  # 저지 모델 오류/파싱 실패 → 502 (외부 의존 실패)
+        logger.exception("LLM-as-judge 평가 실패 (trace_id=%s)", trace_id)
+        raise HTTPException(status_code=502, detail=f"평가 실패: {e}")
+
+    return await trace_repo.add_evaluation(trace_id, evaluation)

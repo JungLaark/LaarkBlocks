@@ -56,6 +56,12 @@ python scripts/run_client.py "(6 + 4) * 7 을 계산해줘"
 | POST | `/api/v1/knowledge` | 지식베이스 생성 (`kb__이름` 도구 자동 등록) |
 | POST | `/api/v1/knowledge/{name}/documents` | 문서 등록 (청킹→임베딩→색인) |
 | POST | `/api/v1/knowledge/{name}/search` | 하이브리드 검색 (디버그) |
+| GET | `/api/v1/traces` | 실행 이력 목록 (필터/페이지네이션) |
+| GET | `/api/v1/traces/{id}` | 트레이스 상세 — LLM/도구 스팬 타임라인 |
+| GET | `/api/v1/stats/usage` | 토큰·비용·지연·에러율 집계 |
+| GET | `/api/v1/stats/usage/by-agent` | 에이전트별 비용 집계 |
+| POST | `/api/v1/traces/{id}/evaluate` | LLM-as-judge 품질 평가 실행 |
+| POST | `/api/v1/traces/{id}/evaluations` | 평가 수동 등록 (사람 피드백) |
 | GET | `/health` | 헬스체크 |
 
 ### 실행 요청 예시
@@ -87,8 +93,15 @@ src/
 │   ├── tool_registry.py      # 도구 레지스트리 (이름 → 구현체)
 │   ├── mcp_manager.py        # MCP 서버 연결/도구 동적 주입 (mcp__서버__도구)
 │   ├── knowledge.py          # RAG — 청킹, BM25+벡터 RRF 하이브리드 (kb__이름)
-│   └── engine.py             # 실행 엔진 — 동적 그래프 빌드, 세션 메모리, 슈퍼바이저
-└── api/v1/endpoints.py       # SSE API + 세션 이력 + MCP/지식베이스 관리
+│   ├── tracing.py            # TraceCollector + 비동기 적재 파이프라인(sink)
+│   ├── pricing.py            # 모델 토큰 단가표 → 비용 계산
+│   ├── judge.py              # LLM-as-judge 품질 평가
+│   └── engine.py             # 실행 엔진 — 동적 빌드, 세션 메모리, 슈퍼바이저, 계측
+├── db/
+│   ├── models.py             # ORM — traces / spans / evaluations
+│   ├── database.py           # async 엔진 (SQLite ↔ PostgreSQL 겸용)
+│   └── repository.py         # 적재/조회/집계 (Pydantic ↔ ORM 경계)
+└── api/v1/endpoints.py       # SSE API + 세션/MCP/지식베이스/운영 콘솔
 tests/                    # Fake provider 주입으로 LLM 서버 없이 전 경로 검증
 configs/agents/           # 에이전트 프리셋 (JSON)
 scripts/run_client.py     # SSE 수동 테스트 클라이언트
@@ -109,7 +122,9 @@ pytest -v    # 18 passed
 - [x] **1단계 — 실행 엔진 코어**: 설정 기반 동적 그래프 빌드, 모델 추상화, SSE 스트리밍
 - [x] **2단계(a) — 세션 메모리 & MCP**: 체크포인터 기반 멀티턴 대화(에이전트/세션 격리), MCP 서버 도구 동적 주입(`mcp__서버__도구`), 무중단 재로드
 - [x] **2단계(b) — 지식 레이어 & 멀티 에이전트**: RAG 지식베이스(벡터 + 직접 구현한 BM25 → RRF 하이브리드 검색, `kb__이름` 도구 자동 주입), 슈퍼바이저 멀티 에이전트(agent-as-tool 위임, 워커 스트림 분리)
-- [ ] **2단계(c) — 검색 고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 검색 품질 평가
+- [x] **3단계 — 운영 콘솔(LLMOps) 백엔드**: Trace/Span 실행 이력 자동 수집(워커 비용 포함), 토큰·비용 집계(모델 단가표), 비동기 적재 파이프라인(sink, 응답 지연 0), LLM-as-judge 품질 평가. SQLite ↔ PostgreSQL 겸용(SQLAlchemy async)
+- [ ] **4단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 플레이그라운드, 트레이스 뷰어, 비용 대시보드
+- [ ] **고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 평가, sLLM 파인튜닝 모델 등록
 - [ ] **3단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 버전 저장/롤백, 테스트 플레이그라운드
 - [ ] **4단계 — 운영 콘솔 (LLMOps)**: 실행 이력/트레이스 뷰어, 토큰·비용 집계, LLM-as-judge 품질 평가
 - [ ] **5단계 — 모델 확장**: LoRA 파인튜닝 sLLM 등록, GGUF 양자화 서빙

@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # MCP 서버 목록 설정 파일 — 존재하면 앱 기동 시 자동 연결된다
     mcp_config_path: str = "configs/mcp_servers.json"
 
+    # ── 운영 콘솔 (LLMOps) ──────────────────────────────────────
+    # 실행 이력 저장소. 운영 전환 시 postgresql+asyncpg://... 로 교체
+    database_url: str = "sqlite+aiosqlite:///./laarkblocks.db"
+    # 모델 토큰 단가표 오버라이드 파일 (선택)
+    pricing_config_path: str = "configs/model_pricing.json"
+
     @property
     def cors_origin_list(self) -> list[str]:
         """콤마 구분 CORS 설정을 리스트로 변환."""

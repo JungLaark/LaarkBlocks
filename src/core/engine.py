@@ -37,7 +37,9 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from src.core.llm_factory import create_chat_model
 from src.core.tool_registry import resolve_tools
+from src.core.tracing import TraceCollector, emit
 from src.schemas.agent import AgentConfig, StreamEventType
+from src.schemas.tracing import SpanType, TraceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -188,73 +190,133 @@ class AgentEngine:
         Yields:
             {"type": StreamEventType, ...payload} 형태의 dict
         """
-        use_memory = session_id is not None
-        graph = self.build_graph(config, use_memory=use_memory)
-        inputs = {"messages": [HumanMessage(content=user_message)]}
+        collector = TraceCollector(config, user_message, session_id)
         final_text_parts: list[str] = []  # done 이벤트에 담을 전체 응답 누적 버퍼
         last_model_text = ""  # 스트리밍 미지원 모델 대비 폴백 (on_chat_model_end)
 
-        # 체크포인터는 run config 의 thread_id 를 기준으로 상태를 저장/복원한다
-        run_config: dict[str, Any] = {"recursion_limit": _RECURSION_LIMIT}
-        if use_memory:
-            run_config["configurable"] = {
-                "thread_id": self._thread_id(config, session_id)
-            }
+        try:
+            # 그래프 빌드 오류(미등록 provider/도구)도 트레이스에 남도록 try 안에서 빌드
+            use_memory = session_id is not None
+            graph = self.build_graph(config, use_memory=use_memory)
+            inputs = {"messages": [HumanMessage(content=user_message)]}
 
-        async for event in graph.astream_events(
-            inputs,
-            version="v2",
-            config=run_config,
-        ):
-            # 워커 내부 이벤트(토큰/도구)는 스킵 — 워커 활동은 슈퍼바이저의
-            # delegate_to__* 도구 호출(tool_start/tool_end)로만 표면화된다.
-            if _WORKER_TAG in event.get("tags", []):
-                continue
+            # 체크포인터는 run config 의 thread_id 를 기준으로 상태를 저장/복원한다
+            run_config: dict[str, Any] = {"recursion_limit": _RECURSION_LIMIT}
+            if use_memory:
+                run_config["configurable"] = {
+                    "thread_id": self._thread_id(config, session_id)
+                }
 
-            kind = event["event"]
+            async for event in graph.astream_events(
+                inputs,
+                version="v2",
+                config=run_config,
+            ):
+                kind = event["event"]
+                run_id = str(event.get("run_id"))
+                is_worker = _WORKER_TAG in event.get("tags", [])
 
-            # ── 모델 토큰 스트림 ────────────────────────────────
-            if kind == "on_chat_model_stream":
-                # agent 노드에서 발생한 청크만 통과시킨다.
-                # (멀티 에이전트 확장 시 노드별 구분의 기준점이 된다)
-                if event.get("metadata", {}).get("langgraph_node") != _AGENT_NODE:
-                    continue
-                text = _chunk_to_text(event["data"]["chunk"])
-                # tool_call 전용 청크는 content 가 비어 있으므로 스킵
-                if not text:
-                    continue
-                final_text_parts.append(text)
-                yield {"type": StreamEventType.TOKEN, "content": text}
-
-            # ── 모델 호출 종료 — 비스트리밍 모델 폴백용 최종 텍스트 기록 ──
-            elif kind == "on_chat_model_end":
-                if event.get("metadata", {}).get("langgraph_node") == _AGENT_NODE:
+                # ── 트레이싱 (워커 포함 — 멀티 에이전트 총비용 누락 방지) ──
+                if kind == "on_chat_model_start":
+                    collector.start_span(
+                        run_id,
+                        SpanType.LLM,
+                        # provider 가 메타데이터로 알려주는 실제 모델명 우선
+                        # (워커는 슈퍼바이저와 다른 모델일 수 있다)
+                        name=event.get("metadata", {}).get("ls_model_name")
+                        or config.model_name,
+                        input_value=event["data"].get("input"),
+                        is_worker=is_worker,
+                    )
+                elif kind == "on_chat_model_end":
                     output = event["data"].get("output")
-                    if isinstance(output, AIMessage):
-                        last_model_text = _chunk_to_text(output)
+                    collector.end_span(
+                        run_id,
+                        output_value=(
+                            _chunk_to_text(output)
+                            if isinstance(output, AIMessage)
+                            else output
+                        ),
+                        # usage_metadata: {"input_tokens": n, "output_tokens": n, ...}
+                        usage=getattr(output, "usage_metadata", None),
+                        model_name=event.get("metadata", {}).get("ls_model_name"),
+                    )
+                elif kind == "on_tool_start":
+                    collector.start_span(
+                        run_id,
+                        SpanType.TOOL,
+                        name=event.get("name", ""),
+                        input_value=event["data"].get("input"),
+                        is_worker=is_worker,
+                    )
+                elif kind == "on_tool_end":
+                    collector.end_span(
+                        run_id,
+                        output_value=_tool_output_to_text(event["data"].get("output")),
+                    )
 
-            # ── 도구 호출 시작/종료 ─────────────────────────────
-            elif kind == "on_tool_start":
-                yield {
-                    "type": StreamEventType.TOOL_START,
-                    "tool": event.get("name", ""),
-                    "input": event["data"].get("input"),
-                }
-            elif kind == "on_tool_end":
-                yield {
-                    "type": StreamEventType.TOOL_END,
-                    "tool": event.get("name", ""),
-                    "output": _tool_output_to_text(event["data"].get("output")),
-                }
+                # ── SSE 방출 — 워커 내부 이벤트는 스킵 (트레이스에만 기록됨).
+                #    워커 활동은 delegate_to__* 도구 호출로만 표면화된다.
+                if is_worker:
+                    continue
 
-        # ── 정상 종료 ──────────────────────────────────────────
-        # 토큰 스트림이 없었던 경우(비스트리밍 provider) 마지막 모델 응답으로 폴백
-        yield {
-            "type": StreamEventType.DONE,
-            "agent_id": config.agent_id,
-            "session_id": session_id,
-            "content": "".join(final_text_parts) or last_model_text,
-        }
+                # ── 모델 토큰 스트림 ────────────────────────────
+                if kind == "on_chat_model_stream":
+                    # agent 노드에서 발생한 청크만 통과시킨다.
+                    if event.get("metadata", {}).get("langgraph_node") != _AGENT_NODE:
+                        continue
+                    text = _chunk_to_text(event["data"]["chunk"])
+                    # tool_call 전용 청크는 content 가 비어 있으므로 스킵
+                    if not text:
+                        continue
+                    final_text_parts.append(text)
+                    yield {"type": StreamEventType.TOKEN, "content": text}
+
+                # ── 모델 호출 종료 — 비스트리밍 모델 폴백용 최종 텍스트 ──
+                elif kind == "on_chat_model_end":
+                    if event.get("metadata", {}).get("langgraph_node") == _AGENT_NODE:
+                        output = event["data"].get("output")
+                        if isinstance(output, AIMessage):
+                            last_model_text = _chunk_to_text(output)
+
+                # ── 도구 호출 시작/종료 ─────────────────────────
+                elif kind == "on_tool_start":
+                    yield {
+                        "type": StreamEventType.TOOL_START,
+                        "tool": event.get("name", ""),
+                        "input": event["data"].get("input"),
+                    }
+                elif kind == "on_tool_end":
+                    yield {
+                        "type": StreamEventType.TOOL_END,
+                        "tool": event.get("name", ""),
+                        "output": _tool_output_to_text(event["data"].get("output")),
+                    }
+
+            # ── 정상 종료 ──────────────────────────────────────
+            # 토큰 스트림이 없었던 경우(비스트리밍 provider) 마지막 응답으로 폴백
+            final_text = "".join(final_text_parts) or last_model_text
+            yield {
+                "type": StreamEventType.DONE,
+                "agent_id": config.agent_id,
+                "session_id": session_id,
+                "content": final_text,
+            }
+            collector.finish(TraceStatus.SUCCESS, final_response=final_text)
+
+        except Exception as e:
+            # 오류도 트레이스로 남긴다 (운영 콘솔의 '에러 상황 분석' 데이터)
+            collector.finish(
+                TraceStatus.ERROR,
+                final_response="".join(final_text_parts) or last_model_text,
+                error=f"{type(e).__name__}: {e}",
+            )
+            raise
+
+        finally:
+            # 클라이언트 연결 종료(GeneratorExit) 등으로 finish 없이 끝나면
+            # build() 가 ABORTED 로 확정한다. 적재는 백그라운드 — 응답 지연 0.
+            emit(collector.build())
 
     async def get_history(
         self, config: AgentConfig, session_id: str

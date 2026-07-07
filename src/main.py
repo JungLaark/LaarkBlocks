@@ -17,7 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from src import __version__
 from src.api.v1.endpoints import router as v1_router
 from src.config import get_settings
+from src.core import tracing
 from src.core.mcp_manager import mcp_manager
+from src.core.pricing import load_pricing_overrides
+from src.db.database import database
+from src.db.repository import trace_repo
 
 # 운영 콘솔(4단계)에서 구조화 로깅(JSON)으로 교체 예정 — 지금은 표준 포맷
 logging.basicConfig(
@@ -28,19 +32,39 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명주기 훅 — 기동 시 MCP 서버 자동 연결.
+    """앱 수명주기 훅.
 
-    MCP 연결 실패는 경고만 남기고 기동을 계속한다.
-    (도구 서버 하나가 죽었다고 플랫폼 전체가 못 뜨면 안 되므로)
+    기동: DB 초기화 → 트레이스 sink 연결 → 단가표 로드 → MCP 연결
+    종료: 대기 중인 트레이스 적재 완료(drain) → 자원 정리
+
+    관측/도구 초기화 실패는 경고만 남기고 기동을 계속한다.
+    (부가 기능 장애가 플랫폼 기동을 막으면 안 되므로)
     """
+    log = logging.getLogger(__name__)
     settings = get_settings()
+
+    # 1) 운영 콘솔: 실행 이력 DB + 트레이스 적재 파이프라인
+    try:
+        await database.init(settings.database_url)
+        tracing.set_sink(trace_repo.save_trace)
+        load_pricing_overrides(Path(settings.pricing_config_path))
+    except Exception:
+        log.exception("트레이싱 초기화 실패 — 실행 이력 적재 비활성")
+
+    # 2) MCP 도구 서버 연결
     try:
         summary = await mcp_manager.connect(Path(settings.mcp_config_path))
         if summary:
-            logging.getLogger(__name__).info("MCP 도구 주입 완료: %s", summary)
+            log.info("MCP 도구 주입 완료: %s", summary)
     except Exception:
-        logging.getLogger(__name__).exception("MCP 초기화 실패 — 내장 도구만 사용")
+        log.exception("MCP 초기화 실패 — 내장 도구만 사용")
+
     yield
+
+    # 우아한 종료: 진행 중인 트레이스 적재를 마저 끝낸다
+    await tracing.drain()
+    tracing.set_sink(None)
+    await database.dispose()
     mcp_manager.disconnect_all()
 
 
