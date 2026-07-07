@@ -1,0 +1,19 @@
+{
+  "_comment": "이 파일을 mcp_servers.json 으로 복사하면 앱 기동 시 자동 연결됩니다. 도구는 'mcp__{서버명}__{도구명}' 이름으로 에이전트 설정(tools)에서 참조합니다.",
+  "servers": {
+    "demo": {
+      "transport": "stdio",
+      "command": "python",
+      "args": ["tests/fixtures/demo_mcp_server.py"]
+    },
+    "_filesystem_example": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/data"]
+    },
+    "_http_example": {
+      "transport": "streamable_http",
+      "url": "http://localhost:9000/mcp"
+    }
+  }
+}

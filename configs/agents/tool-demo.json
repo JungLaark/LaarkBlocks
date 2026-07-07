@@ -1,0 +1,11 @@
+{
+  "agent_id": "tool-demo",
+  "name": "도구 사용 데모",
+  "description": "계산기와 시계 도구를 사용하는 ReAct 에이전트. 도구 루프 시연용.",
+  "model_name": "ollama/qwen3:8b",
+  "system_prompt": "당신은 도구를 활용하는 AI 어시스턴트입니다. 계산이 필요하면 반드시 calculator 도구를, 현재 시각이 필요하면 get_current_time 도구를 사용하세요. 도구 결과를 근거로 한국어로 답변하세요.",
+  "tools": ["calculator", "get_current_time"],
+  "model_params": {
+    "temperature": 0.3
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "agent_id": "general-assistant",
+  "name": "범용 어시스턴트",
+  "description": "도구 없이 대화만 하는 기본 에이전트. 플랫폼 최소 동작 확인용.",
+  "model_name": "ollama/qwen3:8b",
+  "system_prompt": "당신은 친절하고 정확한 AI 어시스턴트입니다. 한국어로 간결하게 답변하세요.",
+  "tools": [],
+  "model_params": {
+    "temperature": 0.7
+  }
+}

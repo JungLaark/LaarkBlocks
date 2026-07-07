@@ -1,0 +1,28 @@
+# ── LaarkBlocks 실행 엔진 코어 의존성 ──────────────────────────────
+# Web Framework
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sse-starlette>=2.1          # SSE(Server-Sent Events) 표준 스트리밍 응답
+
+# Agent Engine
+langgraph>=0.2.60           # 상태 기반 에이전트 그래프 오케스트레이션
+langchain-core>=0.3.30      # 메시지/도구/모델 공통 추상화
+langchain-ollama>=0.2.2     # 로컬 sLLM (Ollama) provider
+
+# MCP (Model Context Protocol) — 외부 도구 서버 연동
+langchain-mcp-adapters>=0.1.0   # MCP 도구 → LangChain BaseTool 변환
+mcp>=1.9                        # MCP Python SDK (테스트용 FastMCP 서버 포함)
+
+# 외부 API provider — 필요 시 주석 해제 (llm_factory가 lazy import 하므로
+# 설치하지 않아도 Ollama 사용에는 영향 없음)
+# langchain-openai>=0.2.14
+# langchain-anthropic>=0.3.1
+
+# Settings / Validation
+pydantic>=2.9
+pydantic-settings>=2.6
+
+# ── Dev / Test ─────────────────────────────────────────────────────
+pytest>=8.3
+pytest-asyncio>=0.24
+httpx>=0.27                 # API 테스트 및 SSE 테스트 클라이언트
