@@ -27,18 +27,22 @@
 ## 빠른 시작
 
 ```bash
-# 1. 의존성 설치
+# 1. 백엔드 의존성 설치
 python -m venv .venv && .venv\Scripts\activate   # (Windows)
 pip install -r requirements.txt
 
-# 2. 서버 실행
+# 2. 백엔드 실행
 uvicorn src.main:app --reload
 # → Swagger UI: http://localhost:8000/docs
 
-# 3. (로컬 모델 사용 시) Ollama 실행 및 모델 준비
+# 3. 프론트엔드 (빌더 스튜디오 + 운영 콘솔)
+cd apps/frontend-studio && npm install && npm run dev
+# → http://localhost:5173  (/api 는 :8000 으로 프록시)
+
+# 4. (로컬 모델 사용 시) Ollama 실행 및 모델 준비
 ollama pull qwen3:8b
 
-# 4. 스트리밍 데모
+# CLI 스트리밍 데모
 python scripts/run_client.py "(6 + 4) * 7 을 계산해줘"
 ```
 
@@ -102,6 +106,11 @@ src/
 │   ├── database.py           # async 엔진 (SQLite ↔ PostgreSQL 겸용)
 │   └── repository.py         # 적재/조회/집계 (Pydantic ↔ ORM 경계)
 └── api/v1/endpoints.py       # SSE API + 세션/MCP/지식베이스/운영 콘솔
+apps/frontend-studio/         # React + TS + Tailwind (Vite)
+├── src/api/                  # 타입(백엔드 스키마 1:1) + fetch 클라이언트
+├── src/hooks/useAgentStream.ts  # POST SSE 스트리밍 파서 (청크 경계 안전)
+├── src/pages/StudioPage.tsx     # 빌더 스튜디오 + 플레이그라운드
+└── src/pages/ConsolePage.tsx    # LLMOps 대시보드 + 스팬 타임라인 뷰어
 tests/                    # Fake provider 주입으로 LLM 서버 없이 전 경로 검증
 configs/agents/           # 에이전트 프리셋 (JSON)
 scripts/run_client.py     # SSE 수동 테스트 클라이언트
@@ -123,8 +132,8 @@ pytest -v    # 18 passed
 - [x] **2단계(a) — 세션 메모리 & MCP**: 체크포인터 기반 멀티턴 대화(에이전트/세션 격리), MCP 서버 도구 동적 주입(`mcp__서버__도구`), 무중단 재로드
 - [x] **2단계(b) — 지식 레이어 & 멀티 에이전트**: RAG 지식베이스(벡터 + 직접 구현한 BM25 → RRF 하이브리드 검색, `kb__이름` 도구 자동 주입), 슈퍼바이저 멀티 에이전트(agent-as-tool 위임, 워커 스트림 분리)
 - [x] **3단계 — 운영 콘솔(LLMOps) 백엔드**: Trace/Span 실행 이력 자동 수집(워커 비용 포함), 토큰·비용 집계(모델 단가표), 비동기 적재 파이프라인(sink, 응답 지연 0), LLM-as-judge 품질 평가. SQLite ↔ PostgreSQL 겸용(SQLAlchemy async)
-- [ ] **4단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 플레이그라운드, 트레이스 뷰어, 비용 대시보드
-- [ ] **고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 평가, sLLM 파인튜닝 모델 등록
+- [x] **4단계 — 빌더 스튜디오 & 운영 콘솔 (React + TS)**: 설정 조립 폼 + SSE 실시간 플레이그라운드(`useAgentStream`), 사용량 스탯 타일·에이전트별 비용 차트·실행 이력·스팬 타임라인 뷰어
+- [ ] **고도화**: pgvector 영속화, 크로스인코더 리랭킹, RAGAS 평가, sLLM 파인튜닝 모델 등록, Docker Compose 배포
 - [ ] **3단계 — 빌더 스튜디오 (React)**: 에이전트 편집 UI, 버전 저장/롤백, 테스트 플레이그라운드
 - [ ] **4단계 — 운영 콘솔 (LLMOps)**: 실행 이력/트레이스 뷰어, 토큰·비용 집계, LLM-as-judge 품질 평가
 - [ ] **5단계 — 모델 확장**: LoRA 파인튜닝 sLLM 등록, GGUF 양자화 서빙

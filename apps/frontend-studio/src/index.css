@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+/* ── LaarkBlocks 디자인 토큰 (검증된 다크 팔레트 기반) ──────────
+   차트 색은 역할(role)로만 참조한다:
+   - series-llm / series-tool : 스팬 타임라인의 2개 카테고리
+   - seq-* : 비용 차트용 단일 청색 계열(순차)
+   - status-* : 성공/실패 상태 전용 (시리즈 색으로 재사용 금지)      */
+:root {
+  --surface-0: #111110; /* 앱 배경 */
+  --surface-1: #1a1a19; /* 카드/패널 */
+  --surface-2: #242423; /* 입력/호버 */
+  --border-1: #33332f;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8a897f;
+
+  --accent: #3987e5; /* 브랜드/포커스 = categorical slot 1 (dark) */
+  --series-llm: #3987e5; /* blue  — 모델 호출 스팬 */
+  --series-tool: #199e70; /* aqua — 도구 실행 스팬 */
+
+  --seq-300: #6da7ec;
+  --seq-450: #2a78d6;
+  --seq-600: #184f95;
+
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+  --status-warning: #fab219;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font-family: "Pretendard", "Malgun Gothic", system-ui, sans-serif;
+}
+
+/* 플레이그라운드 스트리밍 커서 */
+@keyframes blink {
+  50% { opacity: 0; }
+}
+.streaming-cursor::after {
+  content: "▍";
+  color: var(--accent);
+  animation: blink 1s step-start infinite;
+}

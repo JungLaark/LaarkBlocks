@@ -12,6 +12,10 @@ venv/
 # Local database
 *.db
 
+# Frontend
+node_modules/
+apps/frontend-studio/dist/
+
 # IDE
 .idea/
 .vscode/
